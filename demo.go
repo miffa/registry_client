@@ -24,8 +24,8 @@ var (
         filetar  *string = flag.String("tar", "", "image tarball file path")
         filetag  *string = flag.String("tag", "", "镜像tag")
         certfile *string = flag.String("ca", "", "证书文件路径, 非必选(不填，使用http)")
-        user     *string = flag.String("u", "admin", "user")
-        paswd    *string = flag.String("p", "Harbor12345", "password")
+        user     *string = flag.String("u", "anonymous", "user")
+        paswd    *string = flag.String("p", "", "password")
 )
 
 func main() {
