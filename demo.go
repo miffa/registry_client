@@ -4,6 +4,7 @@ import (
         "crypto/tls"
         "crypto/x509"
         "encoding/json"
+        "flag"
         "io/ioutil"
         "net/http"
         "os"
@@ -19,66 +20,85 @@ import (
         "github.com/sirupsen/logrus"
 )
 
+var (
+        filetar  *string = flag.String("tar", "", "image tarball file path")
+        filetag  *string = flag.String("tag", "", "镜像tag")
+        certfile *string = flag.String("ca", "", "证书文件路径, 非必选(不填，使用http)")
+        user     *string = flag.String("u", "admin", "user")
+        paswd    *string = flag.String("p", "Harbor12345", "password")
+)
+
 func main() {
-        Demo1()
+        flag.Parse()
+        if *filetar == "" {
+                logrus.Errorf("empty image tarball file")
+                return
+        }
+        if *filetag == "" {
+                logrus.Errorf("empty image tar")
+                return
+        }
+
+        DockerPushWithoutTLS()
 }
 
-func Demo1() {
+func DockerPushWithoutTLS() {
         logrus.SetLevel(logrus.DebugLevel)
-        // https://medium.com/@sirsean/mutually-authenticated-tls-from-a-go-client-92a117e605a1
-        /*
-                import (
-                    "crypto/tls"
-                    "crypto/x509"
-                    "io/ioutil"
-                    "net/http"
-                )
-                // the CertPool wants to add a root as a []byte so we read the file ourselves
-                caCert, err := ioutil.ReadFile("/path/to/ca.crt")
-                pool := x509.NewCertPool()
-                pool.AppendCertsFromPEM(caCert)
-                // LoadX509KeyPair reads files, so we give it the paths
-                clientCert, err := tls.LoadX509KeyPair("/path/to/client.crt", "/path/to/client.key")
-                tlsConfig := tls.Config{
-                    RootCAs: pool,
-                    Certificates: []tls.Certificate{clientCert},
-                }
-                transport := http.Transport{
-                    TLSClientConfig: &tlsConfig,
-                }
-        */
-
-        imgfile := "/your_image/debianc.tar"
         var img v1.Image
-        img, err := tarball.ImageFromPath(imgfile, nil)
+        img, err := tarball.ImageFromPath(*filetar, nil)
         if err != nil {
+                logrus.Errorf("ImageFromPath %s  err:%v", filetar, err)
+                return
+        }
+
+        cf, err := img.ConfigName()
+        if err != nil {
+                logrus.Errorf(" ConfigName err :%v", err)
                 return
         }
         d, err := img.Digest()
         if err != nil {
+                logrus.Errorf(" Digest err :%v", err)
                 return
         }
-        
+
+        mf, _ := img.Manifest()
+
+        mainf, _ := json.Marshal(mf)
+
         s, _ := img.Size()
-        logrus.Infof("debianc.tar size:%d Digest:%s", s, d.String())
+        logrus.Infof("%s info:", *filetar)
+        logrus.Infof("size:%d", s)
+        logrus.Infof("Digest :%s", d.String())
+        logrus.Infof("ImageID:%s", cf.String())
+        logrus.Infof("manifest:%s", string(mainf))
 
-        // Read in the cert file
-        localCertFile := "/etc/docker/certs.d/your/ca.crt"
-        certs, err := ioutil.ReadFile(localCertFile)
-        if err != nil {
-                logrus.Errorf("Failed to append %q to RootCAs: %v", localCertFile, err)
-                return
+        /////////////////////////////////////////////////////////
+
+        //rootCAs, _ := x509.SystemCertPool()
+        //if rootCAs == nil {
+        rootCAs := x509.NewCertPool()
+        //}
+
+        if *certfile == "" {
+                rootCAs = nil
+        } else {
+                // Read in the cert file
+                certs, err := ioutil.ReadFile(*certfile)
+                if err != nil {
+                        logrus.Errorf("Failed to append %q to RootCAs: %v", certfile, err)
+                        return
+                }
+
+                // Append our cert to the system pool
+                if ok := rootCAs.AppendCertsFromPEM(certs); !ok {
+                        logrus.Errorf("No certs appended, using system certs only")
+                        return
+                }
         }
-
-        // Append our cert to the system pool
-        if ok := rootCAs.AppendCertsFromPEM(certs); !ok {
-                logrus.Infof("No certs appended, using system certs only")
-                return
-        }
-
         // Trust the augmented cert pool in our client
         tlsConfig := &tls.Config{
-                InsecureSkipVerify: false,
+                InsecureSkipVerify: true,
                 RootCAs:            rootCAs,
         }
 
@@ -86,13 +106,20 @@ func Demo1() {
                 TLSClientConfig: tlsConfig,
         }
 
-        basicauth := NewBasicAuth("hello", "kitty")    // registry user and password
-        Push(img, "111.23.45.67/demo/debianc:v1.02",
+        basicauth := NewBasicAuth(*user, *paswd)
+        err = Push(img, *filetag,
                 WithInsecure(true),
                 WithStrictValidation(true),
                 //WithAuthFromDocker(),
                 WithAuth(basicauth),
                 WithTransport(&transport))
+        if err != nil {
+                logrus.Errorf("push %s to %s err:%v", *filetar, *filetag, err)
+                return
+        }
+        logrus.Infof("push %s to %s success", *filetar, *filetag)
+        return
+
 }
 
 //////////////////////////////////////////////////
@@ -229,4 +256,13 @@ func NewBasicAuth(u, p string) authn.Authenticator {
                 Username: u,
                 Password: p,
         }
+}
+
+////////////////// http.RountTrip
+func NewTroilaTransport(repo name.Registry,
+        auth authn.Authenticator,
+        t http.RoundTripper,
+        scopes []string) (http.RoundTripper, error) {
+        //
+        return ts.New(repo, auth, t, scopes)
 }
